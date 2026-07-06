@@ -1,29 +1,32 @@
 # Proxmox VE Production Installation Guide
 
-A complete checklist for deploying Proxmox VE on bare metal in a production environment.
+This a complete checklist for deploying Proxmox VE on bare metal servers in a production environment.
 
 ---
 
 ## 1. Pre-Installation Planning
 
+Choice of PVE version : Proxmox VE 9.2 
+
 ### 1.1 Network Planning
-Keep it simple: a single NIC with one bridge (`vmbr0`) covering both management and VM traffic is enough for most deployments.
+Keep it simple : a single NIC with one bridge (`vmbr0`) covering both management and VM traffic is enough for most deployments.
 
 - Reserve a **static IP** for the node (do NOT use DHCP for the host)
 - Plan the hostname/FQDN and ensure forward + reverse DNS resolution works correctly (important for SSL certificates and, later, clustering if you add nodes)
 - Note down the subnet and gateway before installing
 
 ### 1.2 Storage Strategy
-Decide the filesystem/storage backend up front — this is hard to change post-install:
+Decide the filesystem/storage backend up front, this is hard to change post-install:
 
-- **ZFS (RAIDZ1/RAIDZ2/Mirror)**: Best for data integrity, snapshots, replication. Requires more RAM (ECC RAM strongly recommended).
-- **LVM-Thin**: Good general-purpose default, lower RAM overhead, supports thin provisioning.
-- **Ceph**: For multi-node hyper-converged clusters requiring distributed, self-healing storage.
-- **Hardware RAID**: If using a hardware RAID controller, disable ZFS software RAID on those disks (don't combine both).
+- **ZFS (RAIDZ0)**: Best for data integrity, snapshots, replication. 
 
 ### 1.3 Licensing
 - Decide between the **Enterprise Repository** (paid subscription, stable/tested updates) and **No-Subscription Repository** (free, community, less tested).
 - Production deployments should purchase at least a **Community or Basic subscription** for support and enterprise repo access.
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/tools/pve/post-pve-install.sh)"
+```
 
 ---
 
@@ -34,7 +37,7 @@ Decide the filesystem/storage backend up front — this is hard to change post-i
 - Disable unused peripherals (unused SATA ports, serial, etc.)
 - Set boot mode consistently (UEFI recommended over Legacy BIOS)
 - Configure RAID controller in **HBA/IT mode** if using ZFS (avoid hardware RAID abstraction)
-- Enable **ECC memory reporting** if supported
+- Enable **ECC memory reporting**
 - Update to the latest stable BIOS/firmware version before install
 
 ---
@@ -96,10 +99,6 @@ systemctl status chrony    # or systemd-timesyncd, depending on version
 - Configure additional storage via **Datacenter → Storage** (NFS, iSCSI, Ceph, ZFS pools, directory-based).
 - Enable **email/webhook notifications** for storage/ZFS pool health (`zpool status` monitoring).
 - Set up scheduled **ZFS scrubs**:
-```bash
-# Verify scrub timer is enabled (Proxmox ships this by default)
-systemctl status zfs-scrub-weekly@<poolname>.timer
-```
 
 ### 4.6 Networking
 - The installer already creates a default bridge (`vmbr0`) on your management NIC — use this same bridge for VM traffic too, keeping things simple.
@@ -144,79 +143,6 @@ PasswordAuthentication no
 ### 5.5 Certificates
 - Replace the self-signed certificate with a valid one from an internal CA or Let's Encrypt (Proxmox has built-in ACME support under **Datacenter → ACME**).
 
-### 5.6 Fail2ban (optional but recommended)
-```bash
-apt install fail2ban -y
-```
-- Configure a jail for the Proxmox Web GUI to block repeated failed login attempts.
-
----
-
-## 6. High Availability & Clustering (if multi-node)
-
-- Minimum **3 nodes** recommended for quorum in a cluster (avoids split-brain).
-- Dedicated, low-latency network link for **corosync** (separate from VM/storage traffic).
-- Configure via:
-```bash
-pvecm create <cluster-name>
-pvecm add <ip-of-existing-node>     # run on joining nodes
-pvecm status                        # verify quorum
-```
-- Configure **HA Groups** and **HA Resources** under Datacenter → HA for automatic VM failover.
-- Set up a **QDevice** (quorum device) if running an even number of nodes or a 2-node cluster.
-
----
-
-## 7. Backup Strategy
-
-- Deploy or connect to **Proxmox Backup Server (PBS)** for deduplicated, incremental backups (strongly recommended for production).
-- Configure scheduled backup jobs under **Datacenter → Backup**:
-  - Define retention policy (e.g., keep-daily, keep-weekly, keep-monthly)
-  - Stagger backup windows to avoid I/O contention
-- Test **restore procedures** regularly — an untested backup is not a backup.
-- Store backups off-node (remote PBS, NFS, or object storage) — never solely on the same physical host.
-- Consider **offsite/3-2-1 backup strategy**: 3 copies, 2 media types, 1 offsite.
-
----
-
-## 8. Monitoring & Alerting
-
-- Configure **SMTP/email notifications** under Datacenter → Notifications for backup failures, replication errors, and storage health.
-- Integrate with external monitoring (Zabbix, Prometheus + `pve-exporter`, Checkmk, Grafana) for:
-  - CPU/RAM/disk utilization
-  - ZFS pool health / SMART data
-  - Network throughput
-  - Cluster quorum status
-- Enable **SMART monitoring** (`smartmontools`) for early disk failure detection:
-```bash
-apt install smartmontools -y
-systemctl enable --now smartd
-```
-
----
-
-## 9. Performance Tuning
-
-- Set appropriate **CPU type** per VM (host passthrough for max performance, or a generic type for migration compatibility across different CPU generations in a cluster).
-- Use **VirtIO drivers** for disk and network interfaces in guests for best performance.
-- Enable **Discard/TRIM** for thin-provisioned storage where supported.
-- Tune ZFS ARC size if RAM is constrained:
-```bash
-echo "options zfs zfs_arc_max=<bytes>" >> /etc/modprobe.d/zfs.conf
-update-initramfs -u
-```
-- Disable unnecessary services and avoid running non-virtualization workloads directly on the Proxmox host.
-
----
-
-## 10. Documentation & Change Management
-
-- Document the full configuration: network layout, storage layout, cluster topology, credentials location (in a password manager, not plaintext).
-- Maintain an inventory of VMs/CTs, their purpose, and owners.
-- Establish a **change management process** for updates, especially for clustered production environments (test in staging first).
-- Set up **configuration backups** of `/etc/pve` (already replicated across cluster nodes automatically, but export periodically for disaster recovery).
-
----
 
 ## 11. Final Production Checklist
 
@@ -229,10 +155,6 @@ update-initramfs -u
 - [ ] SSH key-based auth enforced, password auth disabled
 - [ ] TFA enabled for all admin accounts
 - [ ] Valid SSL certificate installed
-- [ ] Backup jobs configured and a test restore performed
-- [ ] Monitoring/alerting integrated
-- [ ] Cluster quorum verified (if applicable)
-- [ ] Documentation completed and stored securely
 
 ---
 
